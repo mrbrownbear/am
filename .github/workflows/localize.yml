@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '.bootstrap/READY'
+      - 'localize.py'
   workflow_dispatch:
 
 permissions:
