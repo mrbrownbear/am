@@ -34,6 +34,7 @@ BLOCKED_HOST_PARTS = (
     "doubleclick",
     "bugsnag",
     "cloudflareinsights",
+    "challenges.cloudflare.com",
     "browser-update",
 )
 
