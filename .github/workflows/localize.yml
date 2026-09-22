@@ -26,7 +26,84 @@ jobs:
           python-version: '3.12'
 
       - name: Install crawler dependencies
-        run: python -m pip install --disable-pip-version-check requests beautifulsoup4
+        run: |
+          python -m pip install --disable-pip-version-check requests beautifulsoup4 playwright
+          python -m playwright install chromium
+
+      - name: Capture page HTML in browser
+        run: |
+          python - <<'PY'
+          import asyncio
+          from collections import deque
+          from pathlib import Path
+          from urllib.parse import urljoin, urlparse, urldefrag
+          from playwright.async_api import async_playwright
+
+          ROOT = "https://www.alanmenken.com/"
+          HOST = urlparse(ROOT).netloc
+          OUT = Path(".seed-pages")
+          OUT.mkdir(exist_ok=True)
+
+          def canonical(raw, base=ROOT):
+              if not raw:
+                  return None
+              u = urljoin(base, raw)
+              u, _ = urldefrag(u)
+              p = urlparse(u)
+              if p.scheme not in ("http", "https") or p.netloc != HOST or p.query:
+                  return None
+              suffix = Path(p.path).suffix.lower()
+              if suffix and suffix not in (".html",):
+                  return None
+              return u
+
+          def out_path(url):
+              p = urlparse(url).path.strip("/")
+              return OUT / ("index.html" if not p else f"{p}/index.html")
+
+          async def main():
+              queue = deque([ROOT, urljoin(ROOT, "work"), urljoin(ROOT, "biography"), urljoin(ROOT, "awards"), urljoin(ROOT, "faq")])
+              seen = set()
+              async with async_playwright() as pw:
+                  browser = await pw.chromium.launch(headless=True)
+                  context = await browser.new_context(
+                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+                      viewport={"width": 1440, "height": 1000},
+                  )
+                  page = await context.new_page()
+                  while queue and len(seen) < 120:
+                      url = canonical(queue.popleft())
+                      if not url or url in seen:
+                          continue
+                      seen.add(url)
+                      try:
+                          response = await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                          await page.wait_for_timeout(2500)
+                          html = await page.content()
+                          if len(html) < 10000:
+                              raise RuntimeError(f"HTML too small: {len(html)} bytes, status={response.status if response else 'unknown'}")
+                          path = out_path(url)
+                          path.parent.mkdir(parents=True, exist_ok=True)
+                          path.write_text(html, "utf-8")
+                          print("CAPTURED", url, "->", path, len(html))
+                          hrefs = await page.eval_on_selector_all("a[href]", "els => els.map(a => a.href)")
+                          for href in hrefs:
+                              linked = canonical(href, url)
+                              if linked and linked not in seen:
+                                  lp = urlparse(linked).path
+                                  if lp in ("/", "/work", "/biography", "/awards", "/faq") or lp.startswith("/work/"):
+                                      queue.append(linked)
+                      except Exception as exc:
+                          print("PAGE FAILED", url, repr(exc))
+                  await browser.close()
+
+              root = OUT / "index.html"
+              if not root.is_file() or root.stat().st_size < 10000:
+                  raise SystemExit("Browser capture did not produce a valid home page")
+              print("Browser captured", len(seen), "page routes")
+
+          asyncio.run(main())
+          PY
 
       - name: Capture complete site locally
         run: python localize.py
