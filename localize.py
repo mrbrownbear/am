@@ -53,6 +53,8 @@ TEXT_EXTS = {".html", ".css", ".js", ".mjs", ".json", ".svg", ".xml", ".webmanif
 EXPLICIT_ASSETS = [
     "https://fast.fonts.net/lt/1.css?apiType=css&c=2b6274cc-0aac-4194-bcb4-c9ff85aa3733&fontids=812386,812395",
     "https://vjs.zencdn.net/vttjs/0.14.1/vtt.min.js",
+    "https://vjs.zencdn.net/vttjs/0.14.1/vttcue.js",
+    "https://vjs.zencdn.net/vttjs/0.14.1/vttregion.js",
 ]
 
 session = requests.Session()
@@ -286,8 +288,8 @@ def write_bytes(path, data):
 def crawl():
     page_queue = deque([(ROOT, 0)])
     asset_queue = deque(EXPLICIT_ASSETS)
-    max_page_depth = 3
-    max_pages = 180
+    max_page_depth = 5
+    max_pages = 500
 
     while page_queue and len(visited_pages) < max_pages:
         url, depth = page_queue.popleft()
