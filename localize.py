@@ -229,7 +229,7 @@ def clean_html(text, base_url):
             "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
             "connect-src 'self'; "
             "worker-src 'self' blob:; "
-            "frame-src 'self'; "
+            "frame-src 'none'; "
             "object-src 'none';"
         )
         if csp:
@@ -277,6 +277,8 @@ def rewrite_text(text, base_url):
 
     text = text.replace("https://www.alanmenken.com/", "/")
     text = text.replace("https://alanmenken.com/", "/")
+    # Repair malformed route occasionally emitted by captured SPA markup.
+    text = text.replace("/index.htmlwork/", "/work/")
 
     return text
 
