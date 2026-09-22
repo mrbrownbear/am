@@ -26,6 +26,7 @@ ASSET_HOSTS = {
     "videos.ctfassets.net",
     "fast.fonts.net",
     "vjs.zencdn.net",
+    "player.vimeo.com",
 }
 
 BLOCKED_HOST_PARTS = (
@@ -124,7 +125,7 @@ def is_asset(url):
     ext = suffix_for(url)
     if ext in ASSET_EXTS:
         return True
-    if p.netloc in {"images.ctfassets.net", "videos.ctfassets.net", "fast.fonts.net", "vjs.zencdn.net"}:
+    if p.netloc in {"images.ctfassets.net", "videos.ctfassets.net", "fast.fonts.net", "vjs.zencdn.net", "player.vimeo.com"}:
         return True
     return False
 
