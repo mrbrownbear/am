@@ -17,6 +17,7 @@ ROOT = "https://www.alanmenken.com/"
 ROOT_HOST = urlparse(ROOT).netloc
 OUT = Path(".")
 STAGE = Path(".localized-build")
+SEED = Path(".seed-pages")
 
 ASSET_HOSTS = {
     ROOT_HOST,
@@ -298,12 +299,17 @@ def crawl():
             continue
         visited_pages.add(url)
         try:
-            r = fetch(url)
-            if "text/html" not in r.headers.get("content-type", "").lower() and "<html" not in r.text[:500].lower():
-                continue
             page_path = local_page_path(url)
+            seed_path = SEED / page_path
+            if seed_path.is_file():
+                source_html = seed_path.read_text("utf-8", errors="replace")
+            else:
+                r = fetch(url)
+                if "text/html" not in r.headers.get("content-type", "").lower() and "<html" not in r.text[:500].lower():
+                    continue
+                source_html = r.text
             page_map[url] = page_path
-            cleaned = clean_html(r.text, url)
+            cleaned = clean_html(source_html, url)
             text_sources[page_path] = (cleaned, url)
 
             soup = BeautifulSoup(cleaned, "html.parser")
@@ -476,6 +482,9 @@ def main():
     index = STAGE / "index.html"
     if not index.exists() or index.stat().st_size < 10000:
         print("ERROR: index.html was not captured correctly", file=sys.stderr)
+        if failed:
+            for url, error in failed[:20]:
+                print(f"FAILED {url}: {error}", file=sys.stderr)
         sys.exit(2)
 
     total = sum(p.stat().st_size for p in STAGE.rglob("*") if p.is_file())
