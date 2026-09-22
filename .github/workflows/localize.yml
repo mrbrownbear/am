@@ -1,134 +1,114 @@
-name: Install Local Mirror
+name: Build Fully Local Mirror
 
 on:
   push:
     paths:
       - '.bootstrap/READY'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  install:
+  build:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download captured assets
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install crawler dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4
+
+      - name: Capture complete site locally
+        run: python localize.py
+
+      - name: Validate local mirror
         run: |
           python - <<'PY'
-          import concurrent.futures
-          import hashlib
-          import json
-          import os
-          import time
-          import urllib.request
+          import re
           from pathlib import Path
+          from bs4 import BeautifulSoup
 
-          manifest = json.loads(Path('.bootstrap/download_manifest.json').read_text('utf-8'))
-          items = manifest['items']
-
-          def fetch(item):
-              url = item['url']
-              path = Path(item['path'])
-              expected = item.get('sha256') or ''
-              path.parent.mkdir(parents=True, exist_ok=True)
-              last = None
-              for attempt in range(4):
-                  try:
-                      req = urllib.request.Request(
-                          url,
-                          headers={
-                              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
-                              'Accept': '*/*',
-                              'Accept-Language': 'en-US,en;q=0.9',
-                          },
-                      )
-                      h = hashlib.sha256()
-                      tmp = path.with_name(path.name + '.download')
-                      with urllib.request.urlopen(req, timeout=120) as response, tmp.open('wb') as out:
-                          while True:
-                              chunk = response.read(1024 * 1024)
-                              if not chunk:
-                                  break
-                              out.write(chunk)
-                              h.update(chunk)
-                      digest = h.hexdigest()
-                      if expected and digest != expected:
-                          raise RuntimeError(f'hash mismatch, expected {expected}, got {digest}')
-                      tmp.replace(path)
-                      return str(path)
-                  except Exception as exc:
-                      last = exc
-                      try:
-                          tmp.unlink()
-                      except Exception:
-                          pass
-                      time.sleep(1.5 * (attempt + 1))
-              raise RuntimeError(f'{url} -> {path}: {last}')
-
-          errors = []
-          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-              futures = {pool.submit(fetch, item): item for item in items}
-              for future in concurrent.futures.as_completed(futures):
-                  item = futures[future]
-                  try:
-                      print('OK', future.result())
-                  except Exception as exc:
-                      errors.append(str(exc))
-                      print('FAILED', exc)
-
-          if errors:
-              print('\n'.join(errors))
-              raise SystemExit(f'{len(errors)} asset downloads failed')
-          print(f'Downloaded and verified {len(items)} local assets')
-          PY
-
-      - name: Restore corrected local files
-        run: |
-          cat .bootstrap/custom.b64.part* | base64 -d > /tmp/custom.tar.gz
-          echo "1b21bf3f5e5f8ff06fa601626e3d0d5efa222b6cfb39dcdb01e63a0c46cfad93  /tmp/custom.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/custom.tar.gz
-
-      - name: Validate build
-        run: |
-          test -s index.html
-          test -s build/js/main-ed48f9e533.js
-          test -s build/css/bundle-07fa906a73.css
-          test -s __sitecloner/runtime.js
-          test -s vercel.json
-          if grep -nE 'mtiFontTrackingCode|fast\.fonts\.net|bugsnag|cloudflareinsights|browser-update\.org|googletagmanager|google-analytics' index.html; then
-            echo "Remote dependency remained in index.html"
-            exit 1
-          fi
-          if grep -n 'index.htmlwork/the-little-mermaid-live-action' index.html; then
-            echo "Malformed route remained in index.html"
-            exit 1
-          fi
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          manifest = json.loads(Path('.bootstrap/download_manifest.json').read_text('utf-8'))
-          missing = [item['path'] for item in manifest['items'] if not Path(item['path']).is_file()]
+          required = [
+              'index.html',
+              'work/index.html',
+              'biography/index.html',
+              'awards/index.html',
+              'faq/index.html',
+              'build/css/bundle-07fa906a73.css',
+          ]
+          missing = [p for p in required if not Path(p).is_file() or Path(p).stat().st_size == 0]
           if missing:
-              raise SystemExit('Missing files: ' + ', '.join(missing[:20]))
+              raise SystemExit('Missing required output: ' + ', '.join(missing))
+
+          bad_hosts = (
+              'fast.fonts.net',
+              'images.ctfassets.net',
+              'videos.ctfassets.net',
+              'vjs.zencdn.net',
+              'bugsnag.com',
+              'browser-update.org',
+              'googletagmanager.com',
+              'google-analytics.com',
+              'cloudflareinsights.com',
+          )
+
+          asset_attrs = ('src', 'poster', 'data-src', 'data-video')
+          failures = []
+          for html_file in Path('.').rglob('*.html'):
+              text = html_file.read_text('utf-8', errors='ignore')
+              soup = BeautifulSoup(text, 'html.parser')
+              for tag in soup.find_all(True):
+                  for attr in asset_attrs:
+                      value = tag.get(attr)
+                      if isinstance(value, str) and value.startswith(('http://', 'https://', '//')):
+                          failures.append(f'{html_file}: remote {attr} {value}')
+                  for attr in ('srcset', 'data-srcset'):
+                      value = tag.get(attr)
+                      if isinstance(value, str):
+                          for part in value.split(','):
+                              url = part.strip().split()[0] if part.strip() else ''
+                              if url.startswith(('http://', 'https://', '//')):
+                                  failures.append(f'{html_file}: remote {attr} {url}')
+              lower = text.lower()
+              for host in bad_hosts:
+                  if host in lower:
+                      failures.append(f'{html_file}: remote host reference {host}')
+
+          for ext in ('*.css', '*.js', '*.mjs'):
+              for f in Path('.').rglob(ext):
+                  text = f.read_text('utf-8', errors='ignore').lower()
+                  for host in bad_hosts:
+                      if host in text:
+                          failures.append(f'{f}: remote host reference {host}')
+
           oversized = [str(p) for p in Path('.').rglob('*') if p.is_file() and p.stat().st_size >= 100 * 1024 * 1024]
           if oversized:
-              raise SystemExit('Files exceed GitHub limit: ' + ', '.join(oversized))
-          print(f"Validated {len(manifest['items'])} downloaded assets")
+              failures.append('Files exceed GitHub 100 MB limit: ' + ', '.join(oversized))
+
+          if failures:
+              print('\n'.join(failures[:200]))
+              raise SystemExit(f'Local mirror validation failed with {len(failures)} issue(s)')
+
+          print('Local mirror validation passed')
           PY
 
-      - name: Publish
+      - name: Commit generated mirror
         run: |
-          rm -rf .bootstrap
-          rm -f localize.py
-          rm -f .github/workflows/localize.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Publish fully local Alan Menken site"
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "Build fully local Alan Menken mirror"
           git push origin main
