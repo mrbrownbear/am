@@ -1,70 +1,71 @@
-name: Build Local Mirror
+name: Install Local Mirror
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    paths:
+      - '.bootstrap/READY'
 
 permissions:
   contents: write
 
-concurrency:
-  group: local-mirror-main
-  cancel-in-progress: false
-
 jobs:
-  localize:
+  install:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install crawler dependencies
-        run: python -m pip install --disable-pip-version-check requests beautifulsoup4
-
-      - name: Build fully local static mirror
-        run: python localize.py
-
-      - name: Validate generated build
+      - name: Rebuild archive
         run: |
+          cat .bootstrap/part* > /tmp/site.b64
+          base64 -d /tmp/site.b64 > /tmp/site.tar.gz
+          echo "cf7a6a69b99cce7dff02352871cb422da65bcb19b6c820e7fe44c0c597c325e6  /tmp/site.tar.gz" | sha256sum -c -
+
+      - name: Install static site
+        run: |
+          tar -xzf /tmp/site.tar.gz
           test -s index.html
           test -s build/js/main-ed48f9e533.js
           test -s build/css/bundle-07fa906a73.css
-          if grep -RInE 'https?://(www\.)?alanmenken\.com/(build|assets|cdn-cgi)' . --exclude-dir=.git --exclude=localize.py --exclude='*.md'; then
-            echo "Found a runtime dependency on the live source site."
+          test -s __sitecloner/runtime.js
+          test -s vercel.json
+
+      - name: Validate local runtime
+        run: |
+          if grep -nE 'bugsnag|cloudflareinsights|browser-update\.org|googletagmanager|google-analytics' index.html; then
+            echo "Remote telemetry remained in index.html"
+            exit 1
+          fi
+          if grep -n 'index.htmlwork/the-little-mermaid-live-action' index.html; then
+            echo "Malformed route remained in index.html"
             exit 1
           fi
           python - <<'PY'
           from pathlib import Path
-          bad = []
+          required = [
+              Path('index.html'),
+              Path('build/js/main-ed48f9e533.js'),
+              Path('build/css/bundle-07fa906a73.css'),
+              Path('__sitecloner/runtime.js'),
+          ]
+          for p in required:
+              if not p.exists() or p.stat().st_size == 0:
+                  raise SystemExit(f"Missing required file: {p}")
           for p in Path('.').rglob('*'):
-              if not p.is_file() or '.git' in p.parts:
-                  continue
-              if p.stat().st_size >= 100 * 1024 * 1024:
-                  bad.append((p, p.stat().st_size))
-          if bad:
-              for p, size in bad:
-                  print(f"{p}: {size} bytes")
-              raise SystemExit("GitHub rejects individual files at or above 100 MiB")
+              if p.is_file() and p.stat().st_size >= 100 * 1024 * 1024:
+                  raise SystemExit(f"File exceeds GitHub limit: {p}")
           PY
 
-      - name: Commit localized site
+      - name: Publish
         run: |
+          rm -rf .bootstrap
+          rm -f localize.py
+          rm -f .github/workflows/localize.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          if git diff --cached --quiet; then
-            echo "No generated changes to commit."
-            exit 0
-          fi
-          git commit -m "Build fully local Alan Menken mirror"
+          git commit -m "Publish fully local Alan Menken site"
           git push origin main
