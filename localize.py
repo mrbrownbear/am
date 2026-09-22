@@ -14,6 +14,7 @@ import requests
 from bs4 import BeautifulSoup
 
 ROOT = "https://www.alanmenken.com/"
+# Page HTML may be browser seeded by GitHub Actions when the origin rejects plain HTTP automation.
 ROOT_HOST = urlparse(ROOT).netloc
 OUT = Path(".")
 STAGE = Path(".localized-build")
